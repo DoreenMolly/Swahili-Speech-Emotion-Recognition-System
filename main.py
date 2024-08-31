@@ -3,37 +3,46 @@ import os
 
 # Numerical Computation
 import numpy as np
+import ast
 
 # Audio Processing
 import librosa
 import noisereduce as nr
-
-# Machine Learning (scikit-learn)
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, classification_report, f1_score, precision_score, recall_score, roc_curve, auc, accuracy_score 
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
-from sklearn.neural_network import MLPClassifier
-from sklearn.preprocessing import label_binarize
-
-
-from itertools import cycle
-
-# Machine Learning (XGBoost and CatBoost)
-from xgboost import XGBClassifier
-from catboost import CatBoostClassifier
-
-# Deep Learning (TensorFlow/Keras)
-import tensorflow as tf
-from tensorflow.keras.layers import Input, Dropout, Dense, LSTM, BatchNormalization
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+import librosa.display
+from scipy.io import wavfile
+from scipy.signal import spectrogram
 
 # Data Analysis and Visualization
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+# Machine Learning (scikit-learn)
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (confusion_matrix, classification_report, f1_score,
+                             precision_score, recall_score, roc_curve, auc, accuracy_score)
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import (RandomForestClassifier, AdaBoostClassifier,
+                              GradientBoostingClassifier, StackingClassifier)
+from sklearn.preprocessing import label_binarize, StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.metrics import ConfusionMatrixDisplay
+from sklearn.model_selection import train_test_split, StratifiedShuffleSplit, GridSearchCV
+
+
+# Machine Learning (XGBoost and CatBoost)
+from xgboost import XGBClassifier
+from catboost import CatBoostClassifier
+
+# Utility
+import pickle
+from itertools import cycle
+import warnings
+
+# Suppress FutureWarnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+# Suppress only UserWarnings with specific message patterns
+warnings.filterwarnings('ignore', category=UserWarning, message='.*use_label_encoder.*')
 
 class DataLoader:
     def __init__(self, data_dir, emotions):
@@ -73,6 +82,105 @@ class DataCleaner(DataLoader):
 
             cleaned_X.append(cleaned_audio)
         return cleaned_X
+
+class EDA(DataCleaner):
+    def __init__(self, X, y, sample_rate, data_dir, emotions):
+        super().__init__(X, sample_rate)
+        self.y = y
+        self.data_dir = data_dir
+        self.emotions = emotions
+        self.genders = {'f': 'Female', 'm': 'Male'}
+        self.gender_counts = {'Female': 0, 'Male': 0, 'Unknown': 0}
+        self.emotion_counts = {emotion: 0 for emotion in emotions}
+        self.audio_lengths = {emotion: [] for emotion in emotions}
+
+    def count_recordings_per_emotion(self):
+        for i, emotion in enumerate(self.emotions):
+            emotion_dir = os.path.join(self.data_dir, emotion)
+            wav_files = [f for f in os.listdir(emotion_dir) if f.endswith('.wav')]
+            self.emotion_counts[emotion] = len(wav_files)
+            print(f"Number of recordings for emotion '{emotion}': {len(wav_files)}")
+
+    def count_genders(self):
+        for emotion in self.emotions:
+            emotion_dir = os.path.join(self.data_dir, emotion)
+            wav_files = [f for f in os.listdir(emotion_dir) if f.endswith('.wav')]
+            for filename in wav_files:
+                gender_code = filename[1].lower()
+                if gender_code in self.genders:
+                    self.gender_counts[self.genders[gender_code]] += 1
+                else:
+                    self.gender_counts['Unknown'] += 1
+        print(f"Gender counts: {self.gender_counts}")
+
+    def plot_waveplots_and_spectrograms(self):
+        for i, emotion in enumerate(self.emotions):
+            emotion_dir = os.path.join(self.data_dir, emotion)
+            wav_files = [f for f in os.listdir(emotion_dir) if f.endswith('.wav')]
+            if wav_files:
+                example_file = wav_files[0]
+                filepath = os.path.join(emotion_dir, example_file)
+                audio, sr = librosa.load(filepath)
+                duration = librosa.get_duration(y=audio, sr=sr)
+                
+                # Waveplot
+                plt.figure(figsize=(14, 5))
+                plt.subplot(1, 2, 1)
+                librosa.display.waveshow(audio, sr=sr)
+                plt.title(f'{emotion} Waveplot')
+                
+                # Spectrogram
+                plt.subplot(1, 2, 2)
+                Sxx, f, t, im = plt.specgram(audio, Fs=sr)
+                plt.title(f'{emotion} Spectrogram')
+                
+                plt.tight_layout()
+                plt.show()
+                
+                # Store audio lengths
+                self.audio_lengths[emotion].append(duration)
+
+    def compute_audio_length_statistics(self):
+        audio_length_stats = {}
+        for emotion, lengths in self.audio_lengths.items():
+            if lengths:
+                lengths = np.array(lengths)
+                audio_length_stats[emotion] = {
+                    'mean': np.mean(lengths),
+                    'std': np.std(lengths),
+                    'min': np.min(lengths),
+                    'max': np.max(lengths),
+                    'median': np.median(lengths)
+                }
+        print("Audio length statistics per emotion:")
+        for emotion, stats in audio_length_stats.items():
+            print(f"{emotion}: {stats}")
+
+    def visualize_emotion_distribution(self):
+        emotion_labels = list(self.emotion_counts.keys())
+        counts = list(self.emotion_counts.values())
+        
+        plt.figure(figsize=(10, 6))
+        sns.barplot(x=emotion_labels, y=counts, palette="viridis")
+        plt.xlabel('Emotions')
+        plt.ylabel('Number of Recordings')
+        plt.title('Number of Recordings per Emotion')
+        plt.xticks(rotation=45)
+        plt.show()
+
+    def visualize_gender_distribution(self):
+        gender_labels = list(self.gender_counts.keys())
+        counts = list(self.gender_counts.values())
+        
+        plt.figure(figsize=(8, 6))
+        sns.barplot(x=gender_labels, y=counts, palette="viridis")
+        plt.xlabel('Gender')
+        plt.ylabel('Number of Recordings')
+        plt.title('Number of Recordings by Gender')
+        plt.show()
+
+
+
 
 class AudioPreprocessor(DataCleaner):
     def __init__(self, data_dir, emotions, sample_rate, target_length=16000, verbose=True):
@@ -198,19 +306,48 @@ class FeatureExtractor(AudioPreprocessor):
         """
         self.extract_features()
         return self.features, self.y
-
     
 
 class EmotionLabeler(FeatureExtractor):
     def __init__(self, data_dir, emotions, sample_rate, target_length=16000, n_mfcc=13, verbose=True):
+        """
+        Initializes the EmotionLabeler, inheriting from FeatureExtractor.
+
+        Args:
+            data_dir (str): Path to the directory containing audio files.
+            emotions (list): List of emotion labels.
+            sample_rate (int): Target sample rate for audio processing.
+            target_length (int): Desired length for audio padding/truncation.
+            n_mfcc (int): Number of MFCC coefficients to extract.
+            verbose (bool): Whether to print progress messages.
+        """
         super().__init__(data_dir, emotions, sample_rate, target_length, n_mfcc, verbose)
-        self.emotion_map = {i: emotion for i, emotion in enumerate(emotions)}
+
+        # Define the explicit mapping of emotions to numerical labels
+        self.emotion_map = {
+            'sad': 0,
+            'happy': 1,
+            'surprised': 2,
+            'angry': 3,
+            'calm': 4
+        }
 
     def label_emotions(self):
-        labeled_emotions = [self.emotion_map[label] for label in self.y]
-        return labeled_emotions
+        """
+        Converts numerical labels back to their corresponding emotion names.
+
+        Returns:
+            list: A list of emotion labels corresponding to the numerical labels in self.y.
+        """
+        return [self.emotion_map[label] for label in self.y]
 
     def get_numerical_labels(self):
+        """
+        Returns the numerical labels.
+
+        Returns:
+            numpy.ndarray: The numerical labels (self.y).
+        """
         return self.y
 
 
@@ -226,156 +363,289 @@ class DataSaver(EmotionLabeler):
         df.to_csv(self.save_path, index=False)
         print(f"Data saved to {self.save_path}")
 
-    # Remove `save_to_npy` method since it's not needed
-    # def save_to_npy(self):
-    #     features, labels = self.get_features_and_labels()
-    #     np.save(self.save_path.replace('.csv', '_features.npy'), features)
-    #     np.save(self.save_path.replace('.csv', '_labels.npy'), labels)
-    #     print(f"Features and labels saved to {self.save_path.replace('.csv', '_features.npy')} and {self.save_path.replace('.csv', '_labels.npy')}")
-
     def split_data(self):
         features, labels = self.get_features_and_labels()
         X_train, X_temp, y_train, y_temp = train_test_split(features, labels, test_size=0.3, random_state=42)
         X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
         return X_train, X_val, X_test, y_train, y_val, y_test
     
-class Modeling:
-    def __init__(self, model_name, input_shape=None, num_classes=None):
-        self.model_name = model_name
-        self.input_shape = input_shape  # Only used for neural networks
-        self.num_classes = num_classes
-        self.model = None
-
-    def build_model(self):
-        if self.model_name == 'knn':
-            self.model = KNeighborsClassifier()
-        elif self.model_name == 'random_forest':
-            self.model = RandomForestClassifier()
-        elif self.model_name == 'svm':
-            self.model = SVC(probability=True)
-        elif self.model_name == 'xgboost':
-            self.model = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', verbosity=0)
-        elif self.model_name == 'catboost':
-            self.model = CatBoostClassifier(verbose=0)
-        elif self.model_name == 'mlp':
-            self.model = MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=300)
 
 
-class TrainingWithCallbacks(Modeling):
-    def __init__(self, model_name, input_shape=None, num_classes=None):
-        super().__init__(model_name, input_shape, num_classes)
 
-    def train_model(self, X_train, y_train, X_val=None, y_val=None, epochs=50, batch_size=32):
-        if self.model_name in ['knn', 'random_forest', 'svm', 'xgboost', 'catboost']:
-            self.model.fit(X_train, y_train)
-        elif self.model_name == 'mlp':
-            # For MLP, we don't use epochs and batch_size directly
-            self.model.fit(X_train, y_train)  # No need to pass epochs and batch_size
-            return None  # No history object returned in scikit-learn models
-        else:
-            raise ValueError("Unsupported model name.")
+class FeaturesEDA(DataSaver):
+    def __init__(self, data_dir, emotions, sample_rate, target_length=16000, n_mfcc=13, save_path="processed_data.csv", verbose=True):
+        super().__init__(data_dir, emotions, sample_rate, target_length, n_mfcc, save_path, verbose)
+        self.df = pd.read_csv(self.save_path)  # Load the CSV file
 
+    def get_info(self):
+        """
+        Displays basic information about the DataFrame.
+        """
+        print("DataFrame Info:")
+        print(self.df.info())
 
-class Evaluation(TrainingWithCallbacks):
-    def __init__(self, model_name, input_shape=None, num_classes=None):
-        super().__init__(model_name, input_shape, num_classes)
-        self.history = None
+    def get_statistics(self):
+        """
+        Displays basic statistics of the features in the DataFrame.
+        """
+        print("DataFrame Statistics:")
+        print(self.df.describe())
 
-    def evaluate_model(self, X_test, y_test):
-        y_pred = self.model.predict(X_test)
+    def get_head_tail(self):
+        """
+        Displays the first and last few rows of the DataFrame.
+        """
+        print("DataFrame Head:")
+        print(self.df.head())
+        print("\nDataFrame Tail:")
+        print(self.df.tail())
+
+    def plot_correlation_matrix(self):
+        """
+        Computes and plots the correlation matrix.
+        """
+        # Compute the correlation matrix
+        corr_matrix = self.df.corr()
         
-        # Handle predictions based on model type
-        if self.model_name in ['knn', 'random_forest', 'svm', 'xgboost', 'catboost']:
-            y_pred = y_pred  # Predicted labels are directly provided
-        elif self.model_name == 'mlp':
-            y_pred = np.argmax(y_pred, axis=1) if len(y_pred.shape) > 1 else y_pred
-        else:
-            raise ValueError("Unsupported model name.")
+        # Plot the heatmap
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt='.2f')
+        plt.title('Correlation Matrix')
+        plt.show()
 
-        # Calculate accuracy
-        accuracy = accuracy_score(y_test, y_pred)
-        print(f"Test Accuracy: {accuracy}")
+        # Print a summary of correlation indices
+        print("Correlation Index Summary:")
+        for column in corr_matrix.columns:
+            print(f"\nColumn: {column}")
+            print(corr_matrix[column].sort_values(ascending=False))
 
-        # Generate and display the confusion matrix
-        self.plot_confusion_matrix(y_test, y_pred)
+    def perform_pca(self):
+        """
+        Performs PCA on the feature set and plots the results.
+        """
+        features = self.df.drop(columns=['emotion'])
+        labels = self.df['emotion']
 
-        # Generate and print the classification report
-        print("Classification Report:")
-        print(classification_report(y_test, y_pred))
+        # Standardize features
+        scaler = StandardScaler()
+        features_scaled = scaler.fit_transform(features)
 
-        # Plot ROC Curve based on the number of classes
-        if self.num_classes == 2:
-            self.plot_roc_curve(y_test, y_pred)
-        else:
-            self.plot_multiclass_roc(y_test, y_pred)
+        # Perform PCA
+        pca = PCA(n_components=2)
+        principal_components = pca.fit_transform(features_scaled)
+        
+        # Create a DataFrame for the principal components
+        pca_df = pd.DataFrame(data=principal_components, columns=['PC1', 'PC2'])
+        pca_df['emotion'] = labels
 
-        return accuracy
-
-    def plot_confusion_matrix(self, y_test, y_pred):
-        cm = confusion_matrix(y_test, y_pred)
+        # Plot the PCA results
         plt.figure(figsize=(10, 7))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False)
-        plt.xlabel('Predicted Label')
-        plt.ylabel('True Label')
-        plt.title('Confusion Matrix')
+        sns.scatterplot(x='PC1', y='PC2', hue='emotion', palette='viridis', data=pca_df, alpha=0.7)
+        plt.title('PCA of Audio Features')
+        plt.xlabel('Principal Component 1')
+        plt.ylabel('Principal Component 2')
+        plt.legend(title='Emotion', bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.show()
 
-    def plot_training_history(self):
-        if self.history is None:
-            print("No training history available for non-neural network models.")
-            return
+        # Print PCA summary
+        print(f"PCA Explained Variance Ratio: {pca.explained_variance_ratio_}")
+        print(f"PCA Explained Variance Ratio (Cumulative): {np.cumsum(pca.explained_variance_ratio_)}")
 
-        plt.figure(figsize=(12, 4))
 
-        # Accuracy plot
-        plt.subplot(1, 2, 1)
-        plt.plot(self.history.history['accuracy'], label='Train Accuracy')
-        plt.plot(self.history.history['val_accuracy'], label='Val Accuracy')
-        plt.title('Model Accuracy')
-        plt.xlabel('Epochs')
-        plt.ylabel('Accuracy')
-        plt.legend()
+class Modeling:
+    def __init__(self, file_path, target_column, test_size=0.3, random_state=42):
+        self.file_path = file_path
+        self.target_column = target_column
+        self.test_size = test_size
+        self.random_state = random_state
 
-        # Loss plot
-        plt.subplot(1, 2, 2)
-        plt.plot(self.history.history['loss'], label='Train Loss')
-        plt.plot(self.history.history['val_loss'], label='Val Loss')
-        plt.title('Model Loss')
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.legend()
+        # Load preprocessed data
+        self.df = pd.read_csv(file_path)
 
+        # Separate features and target variable
+        self.X = self.df.drop(columns=[target_column])
+        self.y = self.df[target_column]
+
+        # Binarize the output for multiclass ROC curves
+        self.y_bin = label_binarize(self.y, classes=np.unique(self.y))
+        self.n_classes = self.y_bin.shape[1]
+
+        # Use StratifiedShuffleSplit for stratified sampling
+        sss = StratifiedShuffleSplit(n_splits=1, test_size=self.test_size, random_state=self.random_state)
+        for train_index, test_index in sss.split(self.X, self.y):
+            self.X_train, self.X_test = self.X.iloc[train_index], self.X.iloc[test_index]
+            self.y_train, self.y_test = self.y.iloc[train_index], self.y.iloc[test_index]
+
+        # Binarize the test labels for ROC computation
+        self.y_test_bin = label_binarize(self.y_test, classes=np.unique(self.y))
+
+        # Scale features
+        self.scaler = StandardScaler()
+        self.X_train_scaled = self.scaler.fit_transform(self.X_train)
+        self.X_test_scaled = self.scaler.transform(self.X_test)
+
+        # Initialize classifiers including KNN as the baseline model
+        self.classifiers = {
+            'KNN': KNeighborsClassifier(),
+            'AdaBoost': AdaBoostClassifier(),
+            'Random Boosting': GradientBoostingClassifier(),
+            'XGBoost': XGBClassifier(eval_metric='mlogloss', use_label_encoder=False),
+            'CatBoost': CatBoostClassifier(verbose=0),
+            'Random Forest': RandomForestClassifier()
+        }
+
+    def get_base_learners(self):
+        """Return a list of base learners as (name, model) tuples for stacking."""
+        return [(name, clf) for name, clf in self.classifiers.items()]
+
+    def tune_classifiers(self):
+        param_grid = {
+            'KNN': {'n_neighbors': [3, 5, 7]},
+            'AdaBoost': {'n_estimators': [50, 100]},
+            'Random Boosting': {'n_estimators': [50, 100], 'max_depth': [3, 5]},
+            'XGBoost': {'n_estimators': [50, 100], 'learning_rate': [0.01, 0.1]},
+            'CatBoost': {'depth': [3, 5], 'learning_rate': [0.01, 0.1], 'iterations': [50, 100]},
+            'Random Forest': {'n_estimators': [50, 100], 'max_depth': [3, 5]}
+        }
+
+        results = {}
+
+        for name, clf in self.classifiers.items():
+            print(f"Tuning {name}...")
+            grid_search = GridSearchCV(
+                clf,
+                param_grid.get(name, {}),
+                scoring='f1_weighted',
+                cv=3,  # Reduced number of folds for computational efficiency
+                n_jobs=1  
+            )
+            grid_search.fit(self.X_train_scaled, self.y_train)
+            results[name] = {
+                'Best Parameters': grid_search.best_params_,
+                'Best Score': grid_search.best_score_
+            }
+            print(f"{name} Best Parameters: {grid_search.best_params_}")
+            print(f"{name} Best Score: {grid_search.best_score_}")
+
+        return results
+
+
+class Evaluation(Modeling):
+    def __init__(self, file_path, target_column, test_size=0.3, random_state=42):
+        super().__init__(file_path, target_column, test_size, random_state)
+        self.results = {}
+        self.meta_model = None
+
+    def evaluate_models(self):
+        """Train and evaluate each model separately."""
+        for name, clf in self.classifiers.items():
+            print(f"\nTraining {name}...")
+            clf.fit(self.X_train_scaled, self.y_train)
+            
+            # Predict on training and test data
+            y_pred_train = clf.predict(self.X_train_scaled)
+            y_pred_test = clf.predict(self.X_test_scaled)
+            
+            # Store results
+            self.results[name] = {
+                'train': classification_report(self.y_train, y_pred_train, output_dict=True),
+                'test': classification_report(self.y_test, y_pred_test, output_dict=True)
+            }
+            
+            # Print classification report
+            print(f"\n{name} Classification Report on Test Data:")
+            print(classification_report(self.y_test, y_pred_test, zero_division=1))
+
+            # Plot ROC curve and confusion matrix for models that support probability prediction
+            self.plot_confusion_matrix(name, y_pred_test)
+            if hasattr(clf, "predict_proba"):
+                self.plot_multiclass_roc_curve(name, clf)
+
+            # Visualize the model's performance
+            self.plot_evaluation(name, self.results[name])
+
+    def train_stacking_model(self):
+        """Train a stacking model with KNN as the meta-learner."""
+        print("\nTraining Stacking Model...")
+        base_learners = self.get_base_learners()
+        self.meta_model = StackingClassifier(
+            estimators=base_learners,
+            final_estimator=KNeighborsClassifier(),
+            cv=5
+        )
+        self.meta_model.fit(self.X_train_scaled, self.y_train)
+
+        # Evaluate the stacking model
+        y_pred_train = self.meta_model.predict(self.X_train_scaled)
+        y_pred_test = self.meta_model.predict(self.X_test_scaled)
+
+        # Store results
+        self.results['Stacking Model'] = {
+            'train': classification_report(self.y_train, y_pred_train, output_dict=True),
+            'test': classification_report(self.y_test, y_pred_test, output_dict=True)
+        }
+
+        # Print classification report
+        print("\nStacking Model Classification Report on Test Data:")
+        print(classification_report(self.y_test, y_pred_test, zero_division=1))
+
+        # Plot ROC curve and confusion matrix for the stacking model
+        self.plot_confusion_matrix('Stacking Model', y_pred_test)
+        self.plot_multiclass_roc_curve('Stacking Model', self.meta_model)
+
+        # Visualize the stacking model's performance
+        self.plot_evaluation('Stacking Model', self.results['Stacking Model'])
+
+    def plot_confusion_matrix(self, model_name, y_pred):
+        """Plot confusion matrix for each model."""
+        cm = confusion_matrix(self.y_test, y_pred)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=np.unique(self.y))
+        disp.plot(cmap=plt.cm.Blues)
+        plt.title(f'Confusion Matrix - {model_name}')
         plt.show()
 
-    def plot_roc_curve(self, y_test, y_pred):
-        fpr, tpr, _ = roc_curve(y_test, y_pred)
-        roc_auc = auc(fpr, tpr)
-
-        plt.figure(figsize=(8, 6))
-        plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
-        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('Receiver Operating Characteristic')
-        plt.legend(loc='lower right')
-        plt.show()
-
-    def plot_multiclass_roc(self, y_test, y_pred):
-        y_test_bin = label_binarize(y_test, classes=range(self.num_classes))
-        y_pred_bin = label_binarize(y_pred, classes=range(self.num_classes))
-
+    def plot_multiclass_roc_curve(self, model_name, clf):
+        """Plot ROC curve for multiclass classification using One-vs-Rest approach."""
+        y_prob = clf.predict_proba(self.X_test_scaled)
         fpr = dict()
         tpr = dict()
         roc_auc = dict()
-        for i in range(self.num_classes):
-            fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_pred_bin[:, i])
+
+        # Compute ROC curve and ROC area for each class
+        for i in range(self.n_classes):
+            fpr[i], tpr[i], _ = roc_curve(self.y_test_bin[:, i], y_prob[:, i])
             roc_auc[i] = auc(fpr[i], tpr[i])
 
-        plt.figure(figsize=(8, 6))
+        # Compute micro-average ROC curve and ROC area
+        fpr["micro"], tpr["micro"], _ = roc_curve(self.y_test_bin.ravel(), y_prob.ravel())
+        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+
+        # Compute macro-average ROC curve and ROC area
+        all_fpr = np.unique(np.concatenate([fpr[i] for i in range(self.n_classes)]))
+
+        # Interpolate all ROC curves at these points
+        mean_tpr = np.zeros_like(all_fpr)
+        for i in range(self.n_classes):
+            mean_tpr += np.interp(all_fpr, fpr[i], tpr[i])
+
+        mean_tpr /= self.n_classes
+
+        fpr["macro"] = all_fpr
+        tpr["macro"] = mean_tpr
+        roc_auc["macro"] = auc(fpr["macro"], tpr["macro"])
+
+        # Plot all ROC curves
+        plt.figure()
+        plt.plot(fpr["micro"], tpr["micro"],
+                 label=f'micro-average ROC curve (area = {roc_auc["micro"]:.2f})',
+                 color='deeppink', linestyle=':', linewidth=4)
+
+        plt.plot(fpr["macro"], tpr["macro"],
+                 label=f'macro-average ROC curve (area = {roc_auc["macro"]:.2f})',
+                 color='navy', linestyle=':', linewidth=4)
+
         colors = cycle(['aqua', 'darkorange', 'cornflowerblue'])
-        for i, color in zip(range(self.num_classes), colors):
+        for i, color in zip(range(self.n_classes), colors):
             plt.plot(fpr[i], tpr[i], color=color, lw=2,
                      label=f'ROC curve of class {i} (area = {roc_auc[i]:.2f})')
 
@@ -384,30 +654,85 @@ class Evaluation(TrainingWithCallbacks):
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.title('Multiclass Receiver Operating Characteristic')
+        plt.title(f'Receiver Operating Characteristic - {model_name}')
         plt.legend(loc="lower right")
         plt.show()
 
-    def plot_feature_importance(self):
-        if self.model_name in ['random_forest', 'xgboost', 'catboost']:
-            importance = self.model.feature_importances_
-            plt.figure(figsize=(10, 7))
-            plt.bar(range(len(importance)), importance)
-            plt.title('Feature Importance')
-            plt.xlabel('Feature')
-            plt.ylabel('Importance')
-            plt.show()
-        else:
-            print(f"Feature importance not available for {self.model_name}.")
+    def plot_evaluation(self, model_name, results):
+        """Plot evaluation metrics like Precision, Recall, and F1-score."""
+        categories = list(results['test'].keys())[:-3]  # Exclude 'accuracy', 'macro avg', 'weighted avg'
+        precision = [results['test'][cat]['precision'] for cat in categories]
+        recall = [results['test'][cat]['recall'] for cat in categories]
+        f1_score = [results['test'][cat]['f1-score'] for cat in categories]
 
-    def evaluate_and_plot(self, X_test, y_test):
-        # Evaluate the model and print classification report
-        accuracy = self.evaluate_model(X_test, y_test)
+        x = np.arange(len(categories))  # Label locations
+        width = 0.2  # Bar width
 
-        # Plot relevant plots
-        self.plot_training_history()  # Only for neural network models
-        self.plot_feature_importance()  # Only for models that support it
+        fig, ax = plt.subplots()
+        ax.bar(x - width, precision, width, label='Precision')
+        ax.bar(x, recall, width, label='Recall')
+        ax.bar(x + width, f1_score, width, label='F1 Score')
 
-        return accuracy
+        ax.set_xlabel('Categories')
+        ax.set_title(f'Evaluation Metrics - {model_name}')
+        ax.set_xticks(x)
+        ax.set_xticklabels(categories)
+        ax.legend()
+
+        plt.xticks(rotation=45)
+        plt.show()
+
+class ModelSaver:
+    def __init__(self, evaluation):
+        self.evaluation = evaluation
+
+    def save_model(self, model_name, model):
+        """Save the trained model to disk."""
+        filename = f"{model_name}_model.pkl"
+        with open(filename, 'wb') as file:
+            pickle.dump(model, file)
+        print(f"Model saved as {filename}")
+
+    def save_results(self):
+        """Save evaluation results to a CSV file."""
+        results_df = pd.DataFrame(self.evaluation.results).T
+        results_df.to_csv('evaluation_results.csv', index=True)
+        print("Evaluation results saved to evaluation_results.csv")
 
 
+
+# class ModelComparisonPlotter:
+#     def __init__(self, csv_file):
+#         self.df = pd.read_csv(csv_file)
+
+#     def _parse_metrics(self, metrics_str):
+#         # Convert JSON string to dictionary
+#         return json.loads(metrics_str.replace("'", "\""))
+
+#     def _extract_metrics(self, metrics_type):
+#         metrics_df = pd.DataFrame()
+        
+#         for index, row in self.df.iterrows():
+#             # Assuming your model names are actually in the index or need to be set manually
+#             model_name = self.df.index[index]  # Adjust if model names are elsewhere
+#             result = row[metrics_type]
+            
+#             # You might need to extract data and build DataFrame accordingly
+#             # Example:
+#             metrics = eval(result)  # Be cautious with eval; ensure data is safe
+#             metrics_df = metrics_df.append({'model': model_name, 'metrics': metrics}, ignore_index=True)
+        
+#         return metrics_df
+
+#     def plot_metrics(self):
+#         metrics_types = ['accuracy']  # Adjust as needed
+        
+#         fig, axes = plt.subplots(len(metrics_types), 1, figsize=(10, 5 * len(metrics_types)))
+        
+#         for i, metrics_type in enumerate(metrics_types):
+#             metrics_df = self._extract_metrics(metrics_type=metrics_type)
+#             metrics_df.plot(kind='bar', x='model', y=[f'train_{metrics_type}', f'test_{metrics_type}'], ax=axes[i])
+#             axes[i].set_title(f'{metrics_type.capitalize()} Metrics')
+        
+#         plt.tight_layout()
+#         plt.show()
